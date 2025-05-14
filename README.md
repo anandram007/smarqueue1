@@ -1,9 +1,9 @@
 This project was developed by a team of 5 members:
 
-- https://github.com/anandram007/smartqueue_management – Team leader 
+- https://github.com/anandram007/smartqueue_management – 
 - (https://github.com/Saalim000/smartqueue_management2)
 - (https://github.com/ashwinashok11)
-- https://github.com/kannangitbub 
+- https://github.com/kannangitbub - Team leader 
 - https://github.com/Shxxmi
 
 
