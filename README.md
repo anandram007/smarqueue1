@@ -266,6 +266,10 @@ npm update
 - Use strong JWT_SECRET in production
 
 ## Support
+for adding or changing any more admin or agent
+
+npx prisma generate
+npx prisma db push
 
 For issues and support:
 

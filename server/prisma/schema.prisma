@@ -49,9 +49,9 @@ model Ticket {
   // Relations
   Department     Department?    @relation(fields: [departmentId], references: [id])
   Agent          Agent?         @relation("AgentTickets", fields: [agentId], references: [id])
-  AssignedAgent  Agent?         @relation("AgentAssignedTickets", fields: [assignedAgentId], references: [id], map: "Ticket_assigned_agent_fkey")
+  AssignedAgent  Agent?         @relation("AgentAssignedTickets", fields: [assignedAgentId], references: [id], map: "Ticket_assignedAgent_fkey")
   User           User           @relation("UserTickets", fields: [userId], references: [id])
-  AssignedUser   User?          @relation("UserAssignedTickets", fields: [assignedAgentId], references: [id], map: "Ticket_assigned_user_fkey")
+  AssignedUser   User?          @relation("UserAssignedTickets", fields: [assignedAgentId], references: [id], map: "Ticket_assignedUser_fkey")
   documents      Document[]
   history        TicketHistory[]
 }

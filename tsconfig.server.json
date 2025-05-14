@@ -1,6 +1,7 @@
 {
     "extends": "./tsconfig.json",
     "compilerOptions": {
+        "noImplicitAny": false,
         "target": "ES2020",
         "module": "CommonJS",
         "moduleResolution": "Node",

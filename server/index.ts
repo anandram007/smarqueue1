@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express, { Request, Response, ErrorRequestHandler, RequestHandler } from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -15,6 +16,13 @@ import nodemailer from 'nodemailer';
 import type {
     TicketGenerationData
 } from './types';
+
+// Log environment variables (without sensitive data)
+console.log('Environment check:', {
+    NODE_ENV: process.env.NODE_ENV,
+    DATABASE_URL: process.env.DATABASE_URL ? 'Set' : 'Not set',
+    JWT_SECRET: process.env.JWT_SECRET ? 'Set' : 'Not set',
+});
 
 const prisma = new PrismaClient();
 const app = express();
@@ -81,29 +89,53 @@ const transporter = nodemailer.createTransport({
 });
 
 // Authentication endpoints
-app.post('/api/auth/login', upload.none(), async (req: Request, res: Response) => {
+app.post('/api/auth/login', upload.single('faceImage'), async (req: Request, res: Response) => {
     try {
-        console.log('Login attempt - Form data:', req.body);
+        console.log('Login attempt - Raw body:', req.body);
+        console.log('Login attempt - Headers:', req.headers);
+        console.log('Login attempt - File:', req.file);
 
         const { email, password } = req.body;
 
         if (!email || !password) {
-            res.status(400).json({ message: 'Email and password are required' });
-            return;
+            console.log('Missing credentials - Email:', email, 'Password:', password ? '[PRESENT]' : '[MISSING]');
+            return res.status(400).json({ message: 'Email and password are required' });
         }
 
         // Find user
-        const user = await prisma.user.findUnique({ where: { email } });
+        const user = await prisma.user.findUnique({ 
+            where: { email },
+            select: {
+                id: true,
+                email: true,
+                username: true,
+                password: true,
+                role: true,
+                faceImagePath: true
+            }
+        });
+
         if (!user) {
-            res.status(401).json({ message: 'Invalid credentials' });
-            return;
+            console.log('User not found:', email);
+            return res.status(401).json({ message: 'Invalid credentials' });
         }
 
         // Verify password
         const validPassword = await bcrypt.compare(password, user.password);
         if (!validPassword) {
-            res.status(401).json({ message: 'Invalid credentials' });
-            return;
+            console.log('Invalid password for user:', email);
+            return res.status(401).json({ message: 'Invalid credentials' });
+        }
+
+        // Handle face image if provided
+        if (req.file) {
+            console.log('Updating face image for user:', user.id);
+            await prisma.user.update({
+                where: { id: user.id },
+                data: { 
+                    faceImagePath: req.file.path.replace(/\\/g, '/') // Normalize path for Windows
+                }
+            });
         }
 
         // Generate token
@@ -113,7 +145,9 @@ app.post('/api/auth/login', upload.none(), async (req: Request, res: Response) =
             { expiresIn: '24h' }
         );
 
-        res.json({
+        console.log('Login successful for user:', user.id);
+
+        return res.json({
             id: user.id,
             username: user.username,
             email: user.email,
@@ -122,41 +156,54 @@ app.post('/api/auth/login', upload.none(), async (req: Request, res: Response) =
         });
     } catch (error) {
         console.error('Login error:', error);
-        res.status(500).json({ message: 'Server error during login' });
+        if (error instanceof Error) {
+            return res.status(500).json({ message: `Server error during login: ${error.message}` });
+        }
+        return res.status(500).json({ message: 'Server error during login' });
     }
 });
 
 app.post('/api/auth/register', upload.single('faceImage'), async (req: Request, res: Response) => {
     try {
         console.log('Register attempt - Form data:', req.body);
+        console.log('Register attempt - File:', req.file);
 
         const { username, email, password } = req.body;
 
         // Validate input
         if (!username || !email || !password) {
-            res.status(400).json({ message: 'All fields are required' });
-            return;
+            return res.status(400).json({ message: 'All fields are required' });
         }
 
         // Check if user exists
         const existingUser = await prisma.user.findUnique({ where: { email } });
         if (existingUser) {
-            res.status(400).json({ message: 'User already exists' });
-            return;
+            return res.status(400).json({ message: 'User already exists' });
         }
 
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
+        // Prepare user data
+        const userData: any = {
+            username,
+            email,
+            password: hashedPassword,
+            role: 'customer',
+        };
+
+        // Add face image path if file was uploaded
+        if (req.file) {
+            userData.faceImagePath = req.file.path.replace(/\\/g, '/'); // Normalize path for Windows
+            console.log('Face image path:', userData.faceImagePath);
+        }
+
         // Create user
         const user = await prisma.user.create({
-            data: {
-                username,
-                email,
-                password: hashedPassword,
-                role: 'customer',
-            },
+            data: userData
         });
+
+        console.log('User created successfully:', user.id);
 
         // Generate token
         const token = jwt.sign(
@@ -165,7 +212,7 @@ app.post('/api/auth/register', upload.single('faceImage'), async (req: Request, 
             { expiresIn: '24h' }
         );
 
-        res.status(201).json({
+        return res.status(201).json({
             id: user.id,
             username: user.username,
             email: user.email,
@@ -174,7 +221,10 @@ app.post('/api/auth/register', upload.single('faceImage'), async (req: Request, 
         });
     } catch (error) {
         console.error('Registration error:', error);
-        res.status(500).json({ message: 'Server error during registration' });
+        if (error instanceof Error) {
+            return res.status(500).json({ message: `Server error during registration: ${error.message}` });
+        }
+        return res.status(500).json({ message: 'Server error during registration' });
     }
 });
 
