@@ -1,0 +1,269 @@
+import express, { Request, Response, ErrorRequestHandler } from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import multer from 'multer';
+import { v4 as uuidv4 } from 'uuid';
+import * as faceapi from 'face-api.js';
+import { loadImage } from 'canvas';
+import path from 'path';
+import fs from 'fs';
+import { PrismaClient } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
+import { Canvas, createCanvas, Image } from 'canvas';
+
+// Import types from types.ts
+import type {
+    TicketWithRelations,
+    TicketCreateData,
+    TicketGenerationData,
+    DepartmentStat
+} from './types';
+
+const prisma = new PrismaClient();
+const app = express();
+const httpServer = createServer(app);
+
+// Middleware setup
+app.use(cors({
+    origin: 'http://localhost:5173',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+}));
+app.use(express.json());
+app.use('/uploads', express.static('uploads'));
+
+// Error handling middleware
+const errorHandler: ErrorRequestHandler = (err, _req, res, next) => {
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+    next(err);
+};
+
+app.use(errorHandler);
+
+// In-memory queue storage
+const queue: TicketWithRelations[] = [];
+let ticketCounter = 1000;
+
+// Initialize default departments
+async function initializeDefaultDepartments() {
+    const defaultDepartments = [
+        { name: 'Customer Service' },
+        { name: 'Technical Support' },
+        { name: 'Billing Department' },
+        { name: 'Membership Services' }
+    ];
+
+    for (const dept of defaultDepartments) {
+        const existing = await prisma.department.findFirst({
+            where: { name: dept.name }
+        });
+        if (!existing) {
+            await prisma.department.create({
+                data: dept
+            });
+        }
+    }
+    console.log('Default departments initialized');
+}
+
+// Initialize departments when server starts
+initializeDefaultDepartments().catch(console.error);
+
+// Helper function to calculate ticket completion
+async function calculateTicketCompletion(startDate: Date): Promise<number> {
+    const [completed, total] = await Promise.all([
+        prisma.ticket.count({
+            where: {
+                status: 'completed',
+                createdAt: { gte: startDate }
+            }
+        }),
+        prisma.ticket.count({
+            where: {
+                createdAt: { gte: startDate }
+            }
+        })
+    ]);
+    return total > 0 ? Math.round((completed / total) * 100) : 0;
+}
+
+// Update getDashboardData function
+async function getDashboardData() {
+    const startDate = new Date();
+    startDate.setHours(0, 0, 0, 0);
+
+    try {
+        const [tickets, agents, departments] = await Promise.all([
+            prisma.ticket.findMany({
+                where: {
+                    status: { in: ['waiting', 'serving'] },
+                    createdAt: { gte: startDate }
+                },
+                include: {
+                    user: true,
+                    assignedAgent: true,
+                    Department: true,
+                    Agent: true
+                }
+            }),
+            prisma.agent.findMany({
+                where: {
+                    status: 'available'
+                },
+                include: {
+                    department: true,
+                    tickets: {
+                        where: {
+                            status: 'serving'
+                        }
+                    }
+                }
+            }),
+            prisma.department.findMany({
+                include: {
+                    agents: true,
+                    tickets: {
+                        where: {
+                            status: { in: ['waiting', 'serving'] }
+                        }
+                    }
+                }
+            })
+        ]);
+
+        // Calculate department stats
+        const departmentStats = departments.reduce((acc, dept) => {
+            const activeAgents = dept.agents.filter(a => a.status === 'available').length;
+            const waitingTickets = dept.tickets.filter(t => t.status === 'waiting').length;
+            const servingTickets = dept.tickets.filter(t => t.status === 'serving').length;
+
+            acc[dept.id] = {
+                name: dept.name,
+                activeTickets: waitingTickets + servingTickets,
+                waitingTickets,
+                servingTickets,
+                agentsAvailable: activeAgents,
+                avgWaitTime: activeAgents > 0 ? (waitingTickets * 5) / activeAgents : waitingTickets * 5
+            };
+            return acc;
+        }, {} as Record<string, DepartmentStat>);
+
+        return {
+            stats: {
+                totalActiveTickets: tickets.length,
+                avgWaitTime: 5,
+                customersServed: await prisma.ticket.count({
+                    where: {
+                        status: 'completed',
+                        createdAt: { gte: startDate }
+                    }
+                }),
+                ticketCompletion: await calculateTicketCompletion(startDate)
+            },
+            departmentStats: Object.values(departmentStats),
+            agents: agents.map(agent => ({
+                id: agent.id,
+                name: agent.name,
+                status: agent.status,
+                department: agent.department?.name,
+                isServing: agent.tickets.length > 0
+            }))
+        };
+    } catch (error) {
+        console.error('Error getting dashboard data:', error);
+        return null;
+    }
+}
+
+// Initialize Socket.IO
+const io = new Server(httpServer, {
+    cors: {
+        origin: "http://localhost:5173",
+        methods: ["GET", "POST"],
+        credentials: true,
+    }
+});
+
+// Socket.IO connection handling
+io.on('connection', (socket) => {
+    console.log('Client connected:', socket.id);
+
+    // Handle ticket generation
+    socket.on('generate-ticket', async (ticketData: TicketGenerationData, callback) => {
+        try {
+            // Basic validation
+            if (!ticketData.serviceName || !ticketData.departmentId) {
+                callback({ success: false, error: 'Missing required ticket information' });
+                return;
+            }
+
+            // Generate ticket number synchronously
+            ticketCounter++;
+            const ticketNumber = ticketCounter.toString();
+
+            // Get initial position and wait time estimates quickly
+            const [waitingCount, availableAgents] = await Promise.all([
+                prisma.ticket.count({
+                    where: {
+                        departmentId: ticketData.departmentId,
+                        status: 'waiting'
+                    }
+                }),
+                prisma.agent.count({
+                    where: {
+                        departmentId: ticketData.departmentId,
+                        status: 'available'
+                    }
+                })
+            ]);
+
+            // Calculate initial estimates
+            const initialPosition = waitingCount + 1;
+            const initialWaitTime = availableAgents > 0 ? Math.ceil(5 * initialPosition / availableAgents) : 10;
+
+            // Create ticket with initial estimates
+            const ticketCreateData = {
+                number: ticketNumber,
+                status: 'waiting',
+                userId: ticketData.userId || 'guest', // Use 'guest' user ID for unregistered users
+                customerName: ticketData.customerName,
+                department: ticketData.department,
+                departmentId: ticketData.departmentId,
+                service: ticketData.serviceName,
+                priority: ticketData.priority || 'normal',
+                waitTime: initialWaitTime,
+                position: initialPosition,
+                additionalInfo: ticketData.additionalInfo || ''
+            };
+
+            // Create ticket with optimized includes
+            const newTicket = await prisma.ticket.create({
+                data: ticketCreateData,
+                include: {
+                    Department: true
+                }
+            });
+
+            // Send immediate response
+            callback({ success: true, ticket: newTicket });
+
+            // Emit events after response
+            socket.emit('ticket-created', newTicket);
+            socket.to(`department:${ticketData.departmentId}`).emit('new-ticket', newTicket);
+        } catch (error) {
+            console.error('Failed to create ticket:', error);
+            callback({ success: false, error: 'Failed to create ticket' });
+        }
+    });
+});
+
+const PORT = process.env.PORT || 5000;
+
+httpServer.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+}); 

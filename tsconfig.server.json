@@ -1,0 +1,29 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "target": "ES2020",
+        "module": "CommonJS",
+        "moduleResolution": "Node",
+        "outDir": "./dist",
+        "rootDir": "./server",
+        "esModuleInterop": true,
+        "allowJs": true,
+        "resolveJsonModule": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true,
+        "strict": true,
+        "types": [
+            "node",
+            "@prisma/client"
+        ]
+    },
+    "include": [
+        "server/**/*",
+        "node_modules/.prisma/client"
+    ],
+    "exclude": [
+        "node_modules",
+        "src",
+        "dist"
+    ]
+}

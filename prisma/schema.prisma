@@ -1,0 +1,121 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String    @id @default(uuid())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  username        String
+  email           String    @unique
+  password        String
+  role            String    // 'customer', 'agent', 'admin'
+  status          String?   @default("offline")
+  department      String?
+  faceImagePath   String?
+  faceFeatures    Float[]
+  permissions     String?
+  tickets         Ticket[]  @relation("UserTickets")
+  assignedTickets Ticket[]  @relation("UserAssignedTickets")
+  feedback        Feedback[]
+}
+
+model Ticket {
+  id             String         @id @default(uuid())
+  number         String         @unique
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  status         String
+  department     String
+  departmentId   String?
+  userId         String
+  customerName   String
+  service        String
+  priority       String         @default("normal")
+  waitTime       Int            @default(10)
+  position       Int
+  servicedAt     DateTime?
+  completedAt    DateTime?
+  additionalInfo String?
+  assignedAgentId String?
+  agentId        String?
+
+  // Relations
+  Department     Department?    @relation(fields: [departmentId], references: [id])
+  Agent          Agent?         @relation("AgentTickets", fields: [agentId], references: [id])
+  AssignedAgent  Agent?         @relation("AgentAssignedTickets", fields: [assignedAgentId], references: [id], map: "Ticket_assignedAgent_fkey")
+  User           User           @relation("UserTickets", fields: [userId], references: [id])
+  AssignedUser   User?          @relation("UserAssignedTickets", fields: [assignedAgentId], references: [id], map: "Ticket_assignedUser_fkey")
+  documents      Document[]
+  history        TicketHistory[]
+}
+
+model Department {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  agents    Agent[]
+  tickets   Ticket[]
+}
+
+model Agent {
+  id                   String         @id @default(uuid())
+  name                 String
+  status               String         @default("offline")
+  ticketsHandled       Int            @default(0)
+  avgHandlingTime      Float          @default(0)
+  customerSatisfaction Float          @default(0)
+  departmentId         String
+  department           Department     @relation(fields: [departmentId], references: [id])
+  tickets             Ticket[]       @relation("AgentTickets")
+  assignedTickets     Ticket[]       @relation("AgentAssignedTickets")
+  ticketHistory       TicketHistory[]
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([departmentId])
+}
+
+model Document {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  name      String
+  type      String
+  url       String
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id])
+}
+
+model TicketHistory {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  action    String
+  notes     String?
+  ticketId  String
+  agentId   String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id])
+  agent     Agent    @relation(fields: [agentId], references: [id])
+}
+
+model Feedback {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  name      String
+  email     String
+  subject   String
+  message   String
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+}
